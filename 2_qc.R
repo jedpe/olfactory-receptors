@@ -81,7 +81,6 @@ dev.off()
 #----------------------------#
 
 data.RMA <- rma(data.norm, target = "core")
-expr.mat <- exprs(data.RMA)
 
 ## Plots after RMA normalization
 # Boxplot
@@ -97,7 +96,8 @@ oligo::hist(data.RMA, col = palette, main = "RMA-normalized data (all)",
 dev.off()
 
 # PCA
-PCA.RMA <- prcomp(t(log2(expr.mat)), scale. = FALSE)
+expr.RMA <- log2(exprs(data.RMA))
+PCA.RMA <- prcomp(t(expr.RMA), scale. = FALSE)
 
 percentVar <- round(100*PCA.RMA$sdev^2/sum(PCA.RMA$sdev^2),1)
 sd_ratio <- sqrt(percentVar[2] / percentVar[1])
@@ -114,6 +114,46 @@ ggplot(dataGG, aes(PC1, PC2)) +
   theme(plot.title = element_text(hjust = 0.5))+
   coord_fixed(ratio = sd_ratio) +
   scale_color_brewer(palette="Dark2")
+dev.off()
+
+#--------------------------#
+#### Sample correlation ####
+#--------------------------#
+
+# Correlation matrix
+expr.RMA.cor <- round(cor(expr.RMA),2)
+expr.RMA.cor[lower.tri(expr.RMA.cor)]<- NA
+
+# Correlation heatmap
+expr.RMA.cor.long <- as.data.frame(expr.RMA.cor) %>%
+  rownames_to_column(var = "Sample_1") %>%
+  pivot_longer(!Sample_1, names_to = "Sample_2", values_to = "Correlation", values_drop_na = TRUE) %>%
+  mutate(Sample_1 = factor(Sample_1, levels = celfiles$sample),
+         Sample_2 = factor(Sample_2, levels = celfiles$sample))
+
+pdf(paste0(plot.dir, "RMA_cor.pdf"), width = 20, height = 20)
+ggplot(data = expr.RMA.cor.long, aes(Sample_1, Sample_2, fill = Correlation)) +
+  geom_tile(color = "white") +
+  # scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+  #                     midpoint = 0, limit = c(-1,1), space = "Lab", 
+  #                     name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+  geom_text(aes(Sample_1, Sample_2, label = Correlation), color = "black", size = 3) +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, 
+                               size = 12, hjust = 1),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank(),
+    legend.justification = c(1, 0),
+    legend.position = "bottom",
+    legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                               title.position = "top", title.hjust = 0.5)) + 
+  coord_fixed()
 dev.off()
 
 #-----------------#

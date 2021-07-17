@@ -7,7 +7,6 @@ library(gplots)
 # library(ragene10stprobeset.db)
 library(pd.ragene.1.0.st.v1)
 library(affycoretools)
-library(biomaRt)
 
 #-----------------#
 #### Read data ####
@@ -75,7 +74,7 @@ contrasts <- makeContrasts("hipotalamo - pulmon",
                            levels = design)
 
 ## Model fitting
-annDB <- "ragene10stprobeset.db"
+# annDB <- "ragene10stprobeset.db"
 p.thresh <- 0.05 # p-value threshold
 lfc.thresh <- 0.3 # Log fold change threshold
 n_transcripts <- 29214 # Maximum given by topTable
@@ -86,12 +85,11 @@ fitCB <- eBayes(fitC)
 # Load annotation information
 all.eset <- annotateEset(data.RMA, pd.ragene.1.0.st.v1)
 f.data <- fData(all.eset)
-
-# Configuration to bypass SSL error in biomaRt
-httr::set_config(httr::config(ssl_verifypeer = FALSE))
+f.data <- f.data[, -1]  # Remove PROBESETID column
+colnames(f.data) <- c("ID", "Symbol", "Gene.Name")
 
 ## Differentially expressed genes
-diff.contrast <- function(fit.mod, cont.ind, f.name, html.title, max.n, p.thresh, lfc.thresh) {
+diff.contrast <- function(fit.mod, cont.ind, f.name, max.n, p.thresh, lfc.thresh) {
   
   # Sort by ranking
   TT <- topTable(fit = fit.mod, coef = cont.ind, adjust="fdr", sort.by="logFC", number = max.n)
@@ -99,21 +97,12 @@ diff.contrast <- function(fit.mod, cont.ind, f.name, html.title, max.n, p.thresh
   # Filter transcripts according to the lowest thresholds
   selected <- TT[TT$P.Value <= p.thresh & abs(TT$logFC) >= lfc.thresh, ]
   
-  ## Annotation
   # Annotate the probesets
   probe.labs <- rownames(selected)
-  sym <- f.data[probe.labs, "SYMBOL"]
-  diff.expr <- data.frame(sym, selected)
-  indx <- !is.na(diff.expr$sym)
+  anno.info <- f.data[probe.labs, ]
+  diff.expr <- data.frame(anno.info, selected)
+  indx <- !is.na(diff.expr$Symbol)
   diff.expr <- diff.expr[indx, ] # Only get those with a gene symbol attached
-  
-  # Get Entrezgene IDs for the genes using biomaRt
-  ensembl <- useEnsembl(biomart = "genes", dataset = "rnorvegicus_gene_ensembl")
-  genes.entID <- getBM(attributes = "entrezgene_id", 
-                       filters = "external_gene_name", 
-                       values = diff.expr$sym, 
-                       mart = ensembl)
-  diff.expr <- data.frame(genes.entID, diff.expr)
   
   ## Get genes below specified p-value and above specified lfc threshold
   diff.genes <- diff.expr[diff.expr$P.Value < p.thresh & abs(diff.expr$logFC) > lfc.thresh, ]
@@ -124,15 +113,11 @@ diff.contrast <- function(fit.mod, cont.ind, f.name, html.title, max.n, p.thresh
   
   # Write results (only genes in general)
   write.csv(diff.genes, file = paste0(csv.dir, f.name, ".csv"))
-  htmlpage(genelist = list(genes.entID), filename = paste0(html.dir, f.name, ".html"), 
-           title = html.title, 
-           othernames = diff.genes, table.head = c("Entrez ID", colnames(diff.genes)), 
-           table.center = TRUE)
-  
-  # Return differentially expressed matrices for later use
-  list(genes = diff.genes, mirna = diff.mirna, lncrna = diff.lncrna) %>% return()
-}
 
+  # Return differentially expressed genes table
+  return(diff.genes)
+}
+#paste0(html.dir, f.name, ".html")
 cd.1 <- "hipotalamo vs. pulmon"
 cd.2 <- "hipotalamo vs. stem_cells"
 cd.3 <- "hipotalamo vs. tejido_adiposo"

@@ -4,7 +4,9 @@ library(RColorBrewer)
 library(limma)
 library(annotate)
 library(gplots)
-library(ragene10stprobeset.db)
+# library(ragene10stprobeset.db)
+library(pd.ragene.1.0.st.v1)
+library(affycoretools)
 
 #-----------------#
 #### Read data ####
@@ -35,8 +37,9 @@ palette <- factor(celfiles$group,
                   labels = brewer.pal(n = n_distinct(celfiles$group), name = "Dark2")) %>%
   as.character()
 
-# Normalized data
+# Load normalized data
 data.RMA <- readRDS(paste0(rds.dir, "data.RMA.rds"))
+expr.mat <- exprs(data.RMA)
 
 #-------------------------------#
 #### Differential expression ####
@@ -72,10 +75,83 @@ contrasts <- makeContrasts("hipotalamo - pulmon",
 
 ## Model fitting
 annDB <- "ragene10stprobeset.db"
-p.thresh <- 0.05 # p-value threshold (genes)
-lfc.thresh <- 0.3 # Log fold change threshold (genes)
-n_transcripts <- 542500 # According to the data sheet from Thermofisher
+p.thresh <- 0.05 # p-value threshold
+lfc.thresh <- 0.3 # Log fold change threshold
+n_transcripts <- 29214 # Maximum given by topTable
 fit <- lmFit(expr.mat, design)
 fitC <- contrasts.fit(fit, contrasts)
 fitCB <- eBayes(fitC)
+
+## Annotation (distributed by Affymetrix)
+all.eset <- annotateEset(data.RMA, pd.ragene.1.0.st.v1)
+f.data <- fData(all.eset)
+
+## Differentially expressed genes
+diff.contrast <- function(fit.mod, cont.ind, f.name, html.title, max.n, p.thresh, lfc.thresh) {
+  
+  # Sort by ranking
+  TT <- topTable(fit = fit.mod, coef = cont.ind, adjust="fdr", sort.by="logFC", number = max.n)
+  
+  # Filter transcripts according to the lowest thresholds
+  selected <- TT[TT$P.Value <= p.thresh & abs(TT$logFC) >= lfc.thresh, ]
+  
+  # Annotate the transcripts
+  probe.labs <- rownames(selected)
+  sym <- f.data[probe.labs, "SYMBOL"]
+  diff.expr <- data.frame(sym, selected)
+  indx <- !is.na(diff.expr$sym)
+  diff.expr <- diff.expr[indx, ] # Only get those with a gene symbol attached
+  
+  ## Get genes below specified p-value and above specified lfc threshold
+  diff.genes <- diff.expr[diff.expr$P.Value < p.thresh & abs(diff.expr$logFC) > lfc.thresh, ]
+  
+  # Change p values and adjusted p values to scientific notation
+  diff.genes$P.Value <- format(diff.genes$P.Value, scientific = TRUE)
+  diff.mirna$P.Value <- format(diff.mirna$P.Value, scientific = TRUE)
+  diff.lncrna$P.Value <- format(diff.lncrna$P.Value, scientific = TRUE)
+  
+  diff.genes$adj.P.Val <- format(diff.genes$adj.P.Val, scientific = TRUE)
+  diff.mirna$adj.P.Val <- format(diff.mirna$adj.P.Val, scientific = TRUE)
+  diff.lncrna$adj.P.Val <- format(diff.lncrna$adj.P.Val, scientific = TRUE)
+  
+  # Write results (only genes in general)
+  write.csv(diff.genes, file = paste0(csv.dir, f.name, ".csv"))
+  genes.entID <- rownames(diff.genes) %>% getEG(., data = annDB)
+  htmlpage(genelist = list(genes.entID), filename = paste0(html.dir, f.name, ".html"), 
+           title = html.title, 
+           othernames = diff.genes, table.head = c("Entrez ID", colnames(diff.genes)), 
+           table.center = TRUE)
+  
+  # Return differentially expressed matrices for later use
+  list(genes = diff.genes, mirna = diff.mirna, lncrna = diff.lncrna) %>% return()
+}
+
+cd.1 <- "hipotalamo vs. pulmon"
+cd.2 <- "hipotalamo vs. stem_cells"
+cd.3 <- "hipotalamo vs. tejido_adiposo"
+
+# First contrast (hipotalamo vs. pulmon)
+diff.list1 <- diff.contrast(fit.mod = fitCB, cont.ind = 1, f.name = "hipotalamo-pulmon",
+                            max.n = n_transcripts, 
+                            html.title = paste0("Differetial expression: ", cd.1),
+                            p.thresh = p.thresh, lfc.thresh = lfc.thresh)
+
+# Second contrast (hipotalamo vs. stem cells)
+
+# Third contrast (hipotalamo vs. tejido adiposo)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

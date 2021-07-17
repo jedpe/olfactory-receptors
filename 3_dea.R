@@ -7,6 +7,7 @@ library(gplots)
 # library(ragene10stprobeset.db)
 library(pd.ragene.1.0.st.v1)
 library(affycoretools)
+library(biomaRt)
 
 #-----------------#
 #### Read data ####
@@ -82,9 +83,12 @@ fit <- lmFit(expr.mat, design)
 fitC <- contrasts.fit(fit, contrasts)
 fitCB <- eBayes(fitC)
 
-## Annotation (distributed by Affymetrix)
+# Load annotation information
 all.eset <- annotateEset(data.RMA, pd.ragene.1.0.st.v1)
 f.data <- fData(all.eset)
+
+# Configuration to bypass SSL error in biomaRt
+httr::set_config(httr::config(ssl_verifypeer = FALSE))
 
 ## Differentially expressed genes
 diff.contrast <- function(fit.mod, cont.ind, f.name, html.title, max.n, p.thresh, lfc.thresh) {
@@ -95,28 +99,31 @@ diff.contrast <- function(fit.mod, cont.ind, f.name, html.title, max.n, p.thresh
   # Filter transcripts according to the lowest thresholds
   selected <- TT[TT$P.Value <= p.thresh & abs(TT$logFC) >= lfc.thresh, ]
   
-  # Annotate the transcripts
+  ## Annotation
+  # Annotate the probesets
   probe.labs <- rownames(selected)
   sym <- f.data[probe.labs, "SYMBOL"]
   diff.expr <- data.frame(sym, selected)
   indx <- !is.na(diff.expr$sym)
   diff.expr <- diff.expr[indx, ] # Only get those with a gene symbol attached
   
+  # Get Entrezgene IDs for the genes using biomaRt
+  ensembl <- useEnsembl(biomart = "genes", dataset = "rnorvegicus_gene_ensembl")
+  genes.entID <- getBM(attributes = "entrezgene_id", 
+                       filters = "external_gene_name", 
+                       values = diff.expr$sym, 
+                       mart = ensembl)
+  diff.expr <- data.frame(genes.entID, diff.expr)
+  
   ## Get genes below specified p-value and above specified lfc threshold
   diff.genes <- diff.expr[diff.expr$P.Value < p.thresh & abs(diff.expr$logFC) > lfc.thresh, ]
   
   # Change p values and adjusted p values to scientific notation
   diff.genes$P.Value <- format(diff.genes$P.Value, scientific = TRUE)
-  diff.mirna$P.Value <- format(diff.mirna$P.Value, scientific = TRUE)
-  diff.lncrna$P.Value <- format(diff.lncrna$P.Value, scientific = TRUE)
-  
   diff.genes$adj.P.Val <- format(diff.genes$adj.P.Val, scientific = TRUE)
-  diff.mirna$adj.P.Val <- format(diff.mirna$adj.P.Val, scientific = TRUE)
-  diff.lncrna$adj.P.Val <- format(diff.lncrna$adj.P.Val, scientific = TRUE)
   
   # Write results (only genes in general)
   write.csv(diff.genes, file = paste0(csv.dir, f.name, ".csv"))
-  genes.entID <- rownames(diff.genes) %>% getEG(., data = annDB)
   htmlpage(genelist = list(genes.entID), filename = paste0(html.dir, f.name, ".html"), 
            title = html.title, 
            othernames = diff.genes, table.head = c("Entrez ID", colnames(diff.genes)), 

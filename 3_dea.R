@@ -15,13 +15,13 @@ library(affycoretools)
 setwd("/home/svillicaña/INMEGEN_LB")
 
 # Directories
-# rds.dir <- "/home/svillicaña/INMEGEN_LB/resultados/RDS/expression/"
-# plot.dir <- "/home/svillicaña/INMEGEN_LB/resultados/Plots/expression/"
-# csv.dir <- "/home/svillicaña/INMEGEN_LB/resultados/CSV/expression/"
-
 rds.dir <- "/home/svillicaña/INMEGEN_LB/resultados/RDS/expression/"
-plot.dir <- "/home/jpeña/INMEGEN_LB/resultados/Plots/expression/"
-csv.dir <- "/home/jpeña/INMEGEN_LB/resultados/CSV/expression/"
+plot.dir <- "/home/svillicaña/INMEGEN_LB/resultados/Plots/expression/"
+csv.dir <- "/home/svillicaña/INMEGEN_LB/resultados/CSV/expression/"
+
+# rds.dir <- "/home/svillicaña/INMEGEN_LB/resultados/RDS/expression/"
+# plot.dir <- "/home/jpeña/INMEGEN_LB/resultados/Plots/expression/"
+# csv.dir <- "/home/jpeña/INMEGEN_LB/resultados/CSV/expression/"
 
 # Sample sheet
 celfiles_raw <- read.table('data/sindrome_metabolico_group_file.txt',
@@ -97,24 +97,14 @@ diff.contrast <- function(fit.mod, cont.ind, f.name, max.n, p.thresh, lfc.thresh
   # Sort by ranking
   TT <- topTable(fit = fit.mod, coef = cont.ind, adjust="fdr", sort.by="logFC", number = max.n)
   
-  # Filter transcripts according to the lowest thresholds
-  selected <- TT[TT$P.Value <= p.thresh & abs(TT$logFC) >= lfc.thresh, ]
-  
   # Annotate the probesets
-  probe.labs <- rownames(selected)
+  probe.labs <- rownames(TT)
   anno.info <- f.data[probe.labs, ]
-  diff.expr <- data.frame(anno.info, selected)
+  diff.expr <- data.frame(anno.info, TT)
   indx <- !is.na(diff.expr$Symbol)
-  diff.expr <- diff.expr[indx, ] # Only get those with a gene symbol attached
+  diff.genes <- diff.expr[indx, ] # Only get those with a gene symbol attached
   
-  ## Get genes below specified p-value and above specified lfc threshold
-  diff.genes <- diff.expr[diff.expr$P.Value < p.thresh & abs(diff.expr$logFC) > lfc.thresh, ]
-  
-  # Change p values and adjusted p values to scientific notation
-  diff.genes$P.Value <- format(diff.genes$P.Value, scientific = TRUE)
-  diff.genes$adj.P.Val <- format(diff.genes$adj.P.Val, scientific = TRUE)
-  
-  # Write results (only genes in general)
+  # Write results
   write.csv(diff.genes, file = paste0(csv.dir, f.name, ".csv"))
 
   # Return differentially expressed genes table
@@ -122,7 +112,7 @@ diff.contrast <- function(fit.mod, cont.ind, f.name, max.n, p.thresh, lfc.thresh
 }
 
 # Get the differential expressed genes for each contrast
-diff.list <- c()  # Vector to store differentially expressed data frames
+diff.list <- list()  # Vector to store differentially expressed data frames
 
 contr.names <- colnames(contrasts) %>% str_replace_all(" ", "")
 for (contr.idx in 1:length(contr.names)){
@@ -131,87 +121,67 @@ for (contr.idx in 1:length(contr.names)){
                               f.name = contr.names[contr.idx], max.n = n_transcripts,
                               p.thresh = p.thresh, lfc.thresh = lfc.thresh)
   
-  diff.list <- c(diff.list, diff.genes)
+  diff.list[[contr.idx]] <- diff.genes
 }
+
+# Filter Orl
+diff.list.orl <- mapply(function(diff.genes, f.name){
+  diff.genes.orl <- diff.genes %>%
+    dplyr::filter(str_detect(Gene.Name, "olfactory receptor")) %>%
+    mutate(adj.P.Val = p.adjust(P.Value, method = "fdr"))
+  
+  # Write results
+  write.csv(diff.genes.orl, file = paste0(csv.dir, f.name, "_olr_genes.csv"))
+}, diff.list, contr.names)
 
 #---------------------#
 #### Volcano plots ####
 #---------------------#
-
-contrast.volcano <- function(fit.mod, title, cont.ind, pch.st = 20, p.thresh, lfc.thresh) {
-  # Transform p-value threshold to -log(p-value)
-  logP.thresh <- -log10(p.thresh) # The smaller a p-value gets, the bigger the -log(p-value)
   
-  # Matrices of coefficients and logP
-  coef.mat <- as.matrix(fit.mod$coef) # logFC
-  logP.mat <- -log10(fit.mod$p.value) %>% as.matrix() # -log(p-value)
+contrast.volcano <- function(diff.genes, title, p.thresh, lfc.thresh) {
+  log.p.thresh <- -log10(p.thresh)
   
-  # Set the x and y-axis
-  xl <- min(coef.mat[, cont.ind]) - 0.5
-  xu <- max(coef.mat[, cont.ind]) + 0.5
-  yl <- 0
-  yu <- max(logP.mat[, cont.ind]) + 0.5
+  # Prepare data
+  diff.genes <- diff.genes %>%
+    arrange(adj.P.Val) %>%
+    transmute(Symbol, logFC, log.adj.P.Val = -log10(adj.P.Val))
+  diff.genes$Group <- "NA"
+  diff.genes$Group[diff.genes$logFC >= lfc.thresh &
+                     diff.genes$log.adj.P.Val >= log.p.thresh] <- "UP"
+  diff.genes$Group[diff.genes$logFC <= -lfc.thresh &
+                     diff.genes$log.adj.P.Val >= log.p.thresh] <- "DOWN"
   
-  # Volcano base plot
-  volcanoplot(fit.mod, col="blue", ylim=c(yl, yu), xlim=c(xl, xu), coef = cont.ind,
-              main = title, cex.lab = 1.3, ylab = "-log(p-value)", style = "p-value", pch = pch.st)
+  # Plot
+  p <- ggplot(diff.genes, aes(x = logFC, y = log.adj.P.Val)) +
+    geom_point(aes(colour = Group)) +
+    ggtitle(title) +
+    xlab("Log2 Fold Change") + 
+    ylab("-log(p-value)") +
+    scale_colour_manual(values = c("DOWN" = "firebrick", "NA" = "darkgrey", "UP" = "seagreen")) +
+    geom_hline(yintercept = log.p.thresh, linetype="dashed") +
+    geom_vline(xintercept = lfc.thresh) + 
+    geom_vline(xintercept = -lfc.thresh) + 
+    theme(legend.position = "none")
   
-  # Section the plot
-  par(new=T) # So the next plotted thing overlaps
-  abline(v=-lfc.thresh, col="brown", ylab="", xlab="")
-  par(new=T)
-  abline(v=lfc.thresh, col="brown", ylab="", xlab="")
-  par(new=T)
-  abline(h=logP.thresh, col="black", ylab="", xlab="")
-  
-  # Obtain indices of interest
-  ind1 = abs(coef.mat[, cont.ind]) > lfc.thresh # Values above log fold change threshold
-  ind2 = logP.mat[, cont.ind] > logP.thresh # Values above p-value threshold
-  ind3 = (coef.mat[, cont.ind] > lfc.thresh & logP.mat[, cont.ind] > logP.thresh) # Upper right quadrant 
-  ind4 = (coef.mat[, cont.ind] < -lfc.thresh & logP.mat[, cont.ind] > logP.thresh) # Upper left quadrant
-  
-  # Values above log fold change threshold
-  x = coef.mat[ind1, cont.ind]
-  y = logP.mat[ind1, cont.ind]
-  par(new=T)
-  plot(x, y, col="magenta",ylim=c(yl,yu), xlim=c(xl,xu),main="", pch = 20, 
-       xlab="", ylab="",cex.lab=1.3, cex = 0.35)
-  # Values above B threshold
-  x = coef.mat[ind2, cont.ind]
-  y = logP.mat[ind2, cont.ind]
-  par(new=T)
-  plot(x, y, col="orange",  ylim=c(yl,yu), xlim=c(xl,xu), main="", pch = 20, 
-       xlab="", ylab="",cex.lab=1.3, cex = 0.35)
-  # Upper right quadrant
-  x = coef.mat[ind3, cont.ind]
-  y = logP.mat[ind3, cont.ind]
-  par(new=T)
-  plot(x, y, col="red",  ylim=c(yl,yu), xlim=c(xl,xu), main="", pch = 20, 
-       xlab="", ylab="",cex.lab=1.3, cex = 0.35)
-  # Upper left quadrant
-  x = coef.mat[ind4, cont.ind]
-  y = logP.mat[ind4, cont.ind]
-  par(new=T)
-  plot(x, y, col="darkgreen", ylim=c(yl,yu), xlim=c(xl,xu), main="", pch = 20, 
-       xlab="", ylab="",cex.lab=1.3, cex = 0.35)
+  return(p)
 }
-
-# Remove probes with no gene symbol
-probe.labs <- rownames(fitCB)
-syms <- f.data[probe.labs, "Symbol"]
-indx <- !is.na(syms)
-fitCBS <- fitCB[indx, ]
 
 # Volcano plots for all contrasts
 cd.list <- c(cd.1, cd.2, cd.3, cd.4, cd.5, cd.6)
 for (contr.idx in 1:length(contr.names)){
-  
   # Save the plot as PDF
-  pdf(paste0(plot.dir, "volcano_", contr.names[contr.idx], ".pdf"), width = 14, height = 8)
-  contrast.volcano(fit.mod = fitCBS, cont.ind = contr.idx,
-                   title = paste0("Differential expression: ", cd.list[contr.idx]),
-                   p.thresh = p.thresh, lfc.thresh = lfc.thresh)
-  dev.off()
+  volcano.idx <- contrast.volcano(diff.list[[contr.idx]],
+                                  title = paste0("Differential expression: ", cd.list[contr.idx]),
+                                  p.thresh = p.thresh, lfc.thresh = lfc.thresh)
+  ggsave(paste0(plot.dir, "volcano_", contr.names[contr.idx], ".pdf"),
+         volcano.idx, width = 14, height = 8, device = "pdf")
+  
+  # Orl
+  volcano.idx <- contrast.volcano(diff.list.orl[[contr.idx]],
+                                  title = paste0("Differential expression of Orl genes: ", cd.list[contr.idx]),
+                                  p.thresh = p.thresh, lfc.thresh = lfc.thresh)
+  ggsave(paste0(plot.dir, "volcano_", contr.names[contr.idx], "_olr_genes.pdf"),
+         volcano.idx, width = 14, height = 8, device = "pdf")
 }
 
 #----------------#
